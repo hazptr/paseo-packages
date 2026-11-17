@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Build signed APT and RPM metadata for Paseo releases already downloaded.
+#
+#   build-repo DL OUT
+#
+# DL holds one directory per upstream tag with that release's .deb and .rpm.
+# Packages are never re-hosted: both indexes point at the upstream release
+# assets on github.com.
+#   OUT/site/  -> GitHub Pages (rpm/repodata, keys, .repo file, index)
+#   OUT/apt/   -> assets of this repo's "apt" release (flat APT repo)
+#
+# Env: UPSTREAM (owner/repo), REPO (this owner/repo), PAGES_URL, SIGN_KEY
+# (fingerprint of a secret key in the current GNUPGHOME).
+set -euo pipefail
+
+dl=$(realpath "$1"); out=$(realpath -m "$2")
+: "${UPSTREAM:?}" "${REPO:?}" "${PAGES_URL:?}" "${SIGN_KEY:?}"
+here=$(dirname "$(realpath "$0")")
+gpg_sign() { gpg --batch --yes --local-user "$SIGN_KEY" "$@"; }
+
+rm -rf "$out"; mkdir -p "$out/site/rpm" "$out/apt"
+work=$(mktemp -d "$(dirname "$out")/.build-XXXXXX"); trap 'rm -rf "$work"' EXIT
+mapfile -t tags < <(ls "$dl")
+[ ${#tags[@]} -gt 0 ] || { echo "no releases in $dl" >&2; exit 1; }
+
+# RPM: lay packages out as <tag>/<file> so that, with --baseurl set to the
+# upstream download root, each location resolves to the release asset URL.
+for t in "${tags[@]}"; do
+  mkdir -p "$work/rpm/$t"
+  for f in "$dl/$t"/*.rpm; do ln -s "$f" "$work/rpm/$t/"; done
+done
+createrepo_c --quiet --no-database --baseurl "https://github.com/$UPSTREAM/releases/download/" \
+  --retain-old-md 0 "$work/rpm"
+cp -r "$work/rpm/repodata" "$out/site/rpm/"
+gpg_sign --armor --detach-sign -o "$out/site/rpm/repodata/repomd.xml.asc" \
+  "$out/site/rpm/repodata/repomd.xml"
+
+# APT (flat repo). Filename is relative to the archive root, github.com/, so
+# lay debs out under the upstream download path and index from there.
+for t in "${tags[@]}"; do
+  d="$work/deb/$UPSTREAM/releases/download/$t"; mkdir -p "$d"
+  # apt-ftparchive resolves symlinks into Filename, so link hard (or copy).
+  for f in "$dl/$t"/*.deb; do ln -f "$f" "$d/" 2>/dev/null || cp "$f" "$d/"; done
+done
+(cd "$work/deb" && apt-ftparchive packages "$UPSTREAM/releases/download") > "$out/apt/Packages"
+gzip -9nk "$out/apt/Packages"
+(cd "$out/apt" && apt-ftparchive \
+  -o APT::FTPArchive::Release::Origin="Paseo (unofficial, $REPO)" \
+  -o APT::FTPArchive::Release::Label=Paseo \
+  -o APT::FTPArchive::Release::Suite="$REPO/releases/download/apt/" \
+  -o APT::FTPArchive::Release::Description="Paseo releases from $UPSTREAM" \
+  release . > "$work/Release") && mv "$work/Release" "$out/apt/Release"
+gpg_sign --clearsign -o "$out/apt/InRelease" "$out/apt/Release"
+gpg_sign --armor --detach-sign -o "$out/apt/Release.gpg" "$out/apt/Release"
+
+# Pages: keys, .repo file, landing page, state.
+gpg --armor --export "$SIGN_KEY" > "$out/site/paseo.asc"
+gpg --export "$SIGN_KEY" > "$out/site/paseo.gpg"
+apt_url="https://github.com/$REPO/releases/download/apt/"
+cat > "$out/site/paseo.repo" <<EOF
+[paseo]
+name=Paseo
+baseurl=$PAGES_URL/rpm
+enabled=1
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=$PAGES_URL/paseo.asc
+EOF
+printf 'deb [signed-by=/etc/apt/keyrings/paseo.gpg] https://github.com/ %s\n' \
+  "${apt_url#https://github.com/}" > "$out/site/paseo.list"
+printf '%s\n' "${tags[@]}" | sort -V > "$out/site/state.txt"
+sed -e "s|@PAGES_URL@|$PAGES_URL|g" -e "s|@REPO@|$REPO|g" -e "s|@UPSTREAM@|$UPSTREAM|g" \
+  -e "s|@VERSIONS@|$(sort -rV "$out/site/state.txt" | paste -sd' ')|g" \
+  "$here/../site/index.html" > "$out/site/index.html"
+touch "$out/site/.nojekyll"
+echo "built: $(paste -sd' ' "$out/site/state.txt")"

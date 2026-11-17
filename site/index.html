@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paseo package repository</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  pre { background: #f4f4f4; padding: .75rem; overflow-x: auto; font-size: 14px; }
+</style>
+<h1>Paseo package repository</h1>
+<p>Unofficial APT and DNF repositories for the
+<a href="https://github.com/@UPSTREAM@/releases">Paseo desktop releases</a> (x86_64).
+Packages download straight from the upstream release; only the signed indexes live here.
+Current versions: @VERSIONS@.</p>
+
+<h2>Fedora / RHEL / openSUSE (dnf, zypper)</h2>
+<pre>sudo curl -fsSLo /etc/yum.repos.d/paseo.repo @PAGES_URL@/paseo.repo
+sudo dnf install Paseo</pre>
+<p>zypper: <code>sudo zypper addrepo @PAGES_URL@/paseo.repo &amp;&amp; sudo zypper install Paseo</code></p>
+
+<h2>Debian / Ubuntu (apt)</h2>
+<pre>sudo install -d /etc/apt/keyrings
+sudo curl -fsSLo /etc/apt/keyrings/paseo.gpg @PAGES_URL@/paseo.gpg
+sudo curl -fsSLo /etc/apt/sources.list.d/paseo.list @PAGES_URL@/paseo.list
+sudo apt update &amp;&amp; sudo apt install paseo</pre>
+
+<p>Signing key: <a href="paseo.asc">paseo.asc</a>. Source: <a href="https://github.com/@REPO@">@REPO@</a>.</p>
+</html>

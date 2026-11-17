@@ -1,0 +1,111 @@
+name: update
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if upstream has no new release
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ["scripts/**", "site/**", ".github/workflows/**"]
+
+permissions:
+  contents: write  # upload the APT index to the "apt" release
+  pages: write
+  id-token: write
+  actions: write   # keep the schedule from being disabled after 60 idle days
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: getpaseo/paseo
+  KEEP: 3  # newest stable releases kept in the indexes
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Keep the schedule alive
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/update.yml/enable"
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Pick releases
+        id: pick
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          FORCE: ${{ github.event_name == 'push' || inputs.force }}
+        run: |
+          n=0
+          : > want.txt
+          for t in $(gh release list -R "$UPSTREAM" --exclude-drafts --exclude-pre-releases -L 30 --json tagName -q '.[].tagName'); do
+            c=$(gh release view "$t" -R "$UPSTREAM" --json assets \
+                -q '[.assets[].name | select(endswith(".deb") or endswith(".rpm"))] | length')
+            [ "$c" -ge 2 ] || continue
+            echo "$t" >> want.txt
+            n=$((n + 1)); [ "$n" -lt "$KEEP" ] || break
+          done
+          sort -V -o want.txt want.txt
+          echo "want: $(paste -sd' ' want.txt)"
+          [ -s want.txt ] || { echo "no usable upstream release" >&2; exit 1; }
+          curl -fsSL "$PAGES_URL/state.txt" -o have.txt || : > have.txt
+          echo "have: $(paste -sd' ' have.txt)"
+          if [ "$FORCE" != true ] && cmp -s want.txt have.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download packages
+        if: steps.pick.outputs.changed == 'true'
+        run: |
+          while read -r t; do
+            gh release download "$t" -R "$UPSTREAM" -p '*.deb' -p '*.rpm' -D "dl/$t"
+          done < want.txt
+          ls -lR dl
+
+      - name: Build indexes
+        if: steps.pick.outputs.changed == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y createrepo-c apt-utils
+          export GNUPGHOME=$(mktemp -d)
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          export SIGN_KEY=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')
+          scripts/build-repo dl out
+
+      - name: Publish APT index
+        if: steps.pick.outputs.changed == 'true'
+        run: |
+          gh release view apt >/dev/null 2>&1 || gh release create apt --latest=false \
+            --title "APT repository index" \
+            --notes "Flat APT repository index. Setup instructions: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          # Indexes first, signed Release files last, so the window where
+          # InRelease names files that are not up yet stays as short as possible.
+          gh release upload apt out/apt/Packages out/apt/Packages.gz --clobber
+          gh release upload apt out/apt/Release out/apt/Release.gpg out/apt/InRelease --clobber
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.pick.outputs.changed == 'true'
+        with:
+          path: out/site
+
+      - id: deploy
+        if: steps.pick.outputs.changed == 'true'
+        uses: actions/deploy-pages@v4
