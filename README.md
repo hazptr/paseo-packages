@@ -17,6 +17,21 @@ sudo curl -fsSLo /etc/apt/sources.list.d/paseo.list https://hazptr.github.io/pas
 sudo apt update && sudo apt install paseo
 ```
 
+### Turn off Paseo's own updater
+
+Paseo has no setting for it: it auto-downloads new versions and installs them on quit. Its
+updater (electron-updater) only handles deb/rpm installs when `/opt/Paseo/resources/package-type`
+exists, so exclude that file from installs, then delete the copy already there:
+
+```sh
+# Fedora / RHEL / openSUSE
+echo '%_netsharedpath /opt/Paseo/resources/package-type' | sudo tee /etc/rpm/macros.paseo-no-updater
+# Debian / Ubuntu
+echo 'path-exclude=/opt/Paseo/resources/package-type' | sudo tee /etc/dpkg/dpkg.cfg.d/paseo-no-updater
+# both
+sudo rm -f /opt/Paseo/resources/package-type
+```
+
 ## How it works
 
 Nothing is re-hosted. A scheduled workflow (`.github/workflows/update.yml`, every 3 hours) checks

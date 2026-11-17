@@ -24,5 +24,19 @@ sudo curl -fsSLo /etc/apt/keyrings/paseo.gpg @PAGES_URL@/paseo.gpg
 sudo curl -fsSLo /etc/apt/sources.list.d/paseo.list @PAGES_URL@/paseo.list
 sudo apt update &amp;&amp; sudo apt install paseo</pre>
 
+<h2>Turn off Paseo's own updater</h2>
+<p>Paseo has no setting for this: it downloads new versions itself and installs them on quit.
+Its updater only runs on deb/rpm installs when <code>/opt/Paseo/resources/package-type</code>
+exists, so tell rpm or dpkg never to install that file, then delete the copy already there.
+The rule survives upgrades.</p>
+<pre># Fedora / RHEL / openSUSE
+echo '%_netsharedpath /opt/Paseo/resources/package-type' | sudo tee /etc/rpm/macros.paseo-no-updater
+
+# Debian / Ubuntu
+echo 'path-exclude=/opt/Paseo/resources/package-type' | sudo tee /etc/dpkg/dpkg.cfg.d/paseo-no-updater
+
+# both
+sudo rm -f /opt/Paseo/resources/package-type</pre>
+
 <p>Signing key: <a href="paseo.asc">paseo.asc</a>. Source: <a href="https://github.com/@REPO@">@REPO@</a>.</p>
 </html>
